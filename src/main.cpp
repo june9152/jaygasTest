@@ -1,5 +1,12 @@
 #include <SPI.h>
 #include <Arduino.h>
+#include "Protocentral_ADS1220.h"
+
+// ADS1220 설정
+#define PGA          1                 // Programmable Gain = 1
+#define VREF         2.048            // Internal reference of 2.048V
+#define VFSR         VREF/PGA
+#define FULL_SCALE   (((long int)1<<23)-1)
 
 // SPI 핀 정의
 #define MOSI_PIN 6
@@ -14,54 +21,47 @@
 // 센서 구조체
 struct Sensor {
   uint8_t cs_pin;
+  uint8_t drdy_pin;
   const char* name;
   uint8_t channel;  // ADS1220 입력 채널
   float offset;     // 캘리브레이션 오프셋
+  Protocentral_ADS1220* ads1220;  // ADS1220 인스턴스 포인터
 };
 
+// DRDY 핀 정의 (각 센서마다 다른 핀 필요)
 #if USE_SENSOR == 0
-Sensor sensors[] = { {4,  "Formaldehyde", 0, 0.0} };
+Sensor sensors[] = { {4,  8, "Formaldehyde", 0, 0.0, nullptr} };
 #elif USE_SENSOR == 1
-Sensor sensors[] = { {17, "Acetic Acid",  0, 0.0} };
+Sensor sensors[] = { {17, 18, "Acetic Acid",  0, 0.0, nullptr} };
 #elif USE_SENSOR == 2
-Sensor sensors[] = { {16, "Acetaldehyde", 0, 0.0} };
+Sensor sensors[] = { {16, 9, "Acetaldehyde", 0, 0.0, nullptr} };
 #elif USE_SENSOR == 3
-Sensor sensors[] = { {15, "Toluene",      0, 0.0} };
+Sensor sensors[] = { {15, 10, "Toluene",      0, 0.0, nullptr} };
 #else
 #error "Invalid sensor selected. Please choose a value between 0 and 3."
 #endif
 
 #define NUM_SENSORS 1
 
-// ADS1220 명령어
-#define ADS1220_CMD_RESET    0x06
-#define ADS1220_CMD_START    0x08
-#define ADS1220_CMD_POWERDOWN 0x02
-#define ADS1220_CMD_RDATA    0x10
-#define ADS1220_CMD_RREG     0x20
-#define ADS1220_CMD_WREG     0x40
-
 // Function declarations
 void testConnections();
 void initSensor(uint8_t index);
 int32_t readSensor(uint8_t index, uint8_t channel);
+float convertToMilliV(int32_t i32data);
 float adcToVoltage(int32_t adc);
 float adcToPPM(int32_t adc, uint8_t sensorType);
-void readAllRegisters(uint8_t cs);
 
 void setup() {
   Serial.begin(115200);
   while (!Serial) delay(1);
   
-  Serial.println("\n=== ADS1220 Single Sensor System ===");
+  Serial.println("\n=== ADS1220 Single Sensor System (Using Protocentral Library) ===");
   
   // SPI 초기화
   SPI.begin(SCLK_PIN, MISO_PIN, MOSI_PIN);
-  SPI.setFrequency(1000000); // 1MHz
   
-  // CS 핀 초기화
-  pinMode(sensors[0].cs_pin, OUTPUT);
-  digitalWrite(sensors[0].cs_pin, HIGH);
+  // ADS1220 인스턴스 생성
+  sensors[0].ads1220 = new Protocentral_ADS1220();
   
   delay(10);
   
@@ -78,27 +78,20 @@ void setup() {
 void testConnections() {
   Serial.println("\n--- Connection Test ---");
   
-  digitalWrite(sensors[0].cs_pin, LOW);
-  delayMicroseconds(50);
+  // ADS1220 초기화 시도
+  sensors[0].ads1220->begin(sensors[0].cs_pin, sensors[0].drdy_pin);
   
-  // 리셋 후 기본값 확인
-  SPI.transfer(ADS1220_CMD_RESET);
-  delay(10);
-  
-  // CONFIG0 읽기
-  SPI.transfer(ADS1220_CMD_RREG);
-  SPI.transfer(0x00);
-  uint8_t value = SPI.transfer(0x00);
-  
-  digitalWrite(sensors[0].cs_pin, HIGH);
+  // 테스트 읽기 수행
+  sensors[0].ads1220->set_conv_mode_single_shot();
+  int32_t testValue = sensors[0].ads1220->Read_SingleShot_SingleEnded_WaitForData(MUX_SE_CH0);
   
   Serial.print(sensors[0].name);
   Serial.print(": ");
-  if (value == 0xFF || value == 0x00) {
+  if (testValue == 0xFFFFFF || testValue == 0x000000) {
     Serial.println("Connection FAILED!");
   } else {
-    Serial.print("OK (0x");
-    Serial.print(value, HEX);
+    Serial.print("OK (ADC Value: ");
+    Serial.print(testValue);
     Serial.println(")");
   }
   
@@ -106,103 +99,45 @@ void testConnections() {
 }
 
 void initSensor(uint8_t index) {
-  uint8_t cs = sensors[index].cs_pin;
-  
   Serial.print("Initializing ");
   Serial.print(sensors[index].name);
   Serial.print("... ");
   
-  digitalWrite(cs, LOW);
-  delayMicroseconds(10);
+  Protocentral_ADS1220* ads = sensors[index].ads1220;
   
-  // 리셋
-  SPI.transfer(ADS1220_CMD_RESET);
-  delay(10);
+  // ADS1220 초기화
+  ads->begin(sensors[index].cs_pin, sensors[index].drdy_pin);
   
-  // 설정 쓰기
-  // CONFIG0: 단일 종단 입력 모드 (AIN0 to AVSS)
-  SPI.transfer(ADS1220_CMD_WREG | 0x00);
-  SPI.transfer(0x00);
-  SPI.transfer(0x08); // AIN0/AVSS, Gain=1, PGA disabled
-  
-  // CONFIG1: 데이터 레이트 설정
-  SPI.transfer(ADS1220_CMD_WREG | 0x01);
-  SPI.transfer(0x00);
-  SPI.transfer(0x04); // 20 SPS, Normal mode
-  
-  // CONFIG2: 전압 레퍼런스 설정
-  SPI.transfer(ADS1220_CMD_WREG | 0x02);
-  SPI.transfer(0x00);
-  SPI.transfer(0x10); // Internal 2.048V reference
-  
-  // CONFIG3: IDAC 설정
-  SPI.transfer(ADS1220_CMD_WREG | 0x03);
-  SPI.transfer(0x00);
-  SPI.transfer(0x00); // IDAC off
-  
-  digitalWrite(cs, HIGH);
+  // 설정
+  ads->set_data_rate(DR_20SPS);           // 20 SPS
+  ads->set_pga_gain(PGA_GAIN_1);          // Gain = 1
+  ads->PGA_OFF();                          // PGA 비활성화 (2.048V 범위 사용)
+  ads->set_conv_mode_single_shot();       // 단일 샷 모드
+  ads->set_VREF(VREF_2048);               // 내부 2.048V 레퍼런스 사용
+  ads->set_FIR_Filter(FIR_FILTER_NONE);   // FIR 필터 비활성화
   
   Serial.println("Done");
   delay(5);
 }
 
 int32_t readSensor(uint8_t index, uint8_t channel) {
-  uint8_t cs = sensors[index].cs_pin;
-  int32_t result = 0;
+  Protocentral_ADS1220* ads = sensors[index].ads1220;
   
-  // 채널 선택을 위한 CONFIG0 값 계산
-  uint8_t config0 = (channel << 4) | 0x08; // channel을 AINx/AVSS로 설정
+  // 채널별 MUX 설정 계산
+  uint8_t mux_channel = MUX_SE_CH0 + (channel << 4);
   
-  // 트랜잭션 시작
-  SPI.beginTransaction(SPISettings(1000000, MSBFIRST, SPI_MODE1));
-  digitalWrite(cs, LOW);
-  delayMicroseconds(10);
+  // 단일 샷 읽기
+  int32_t adc_data = ads->Read_SingleShot_SingleEnded_WaitForData(mux_channel);
   
-  // 채널 설정
-  SPI.transfer(ADS1220_CMD_WREG | 0x00);
-  SPI.transfer(0x00);
-  SPI.transfer(config0);
-  
-  // 변환 시작
-  SPI.transfer(ADS1220_CMD_START);
-  
-  // CS를 HIGH로 하여 변환 진행
-  digitalWrite(cs, HIGH);
-  SPI.endTransaction();
-  
-  // 변환 대기 (20SPS = 50ms)
-  delay(55);
-  
-  // 데이터 읽기
-  SPI.beginTransaction(SPISettings(1000000, MSBFIRST, SPI_MODE1));
-  digitalWrite(cs, LOW);
-  delayMicroseconds(10);
-  
-  SPI.transfer(ADS1220_CMD_RDATA);
-  
-  // 24비트 읽기
-  uint8_t data[3];
-  data[0] = SPI.transfer(0x00);
-  data[1] = SPI.transfer(0x00);
-  data[2] = SPI.transfer(0x00);
-  
-  digitalWrite(cs, HIGH);
-  SPI.endTransaction();
-  
-  // 24비트를 32비트로 변환
-  result = ((int32_t)data[0] << 16) | ((int32_t)data[1] << 8) | data[2];
-  
-  // 부호 확장
-  if (result & 0x800000) {
-    result |= 0xFF000000;
-  }
-  
-  return result;
+  return adc_data;
+}
+
+float convertToMilliV(int32_t i32data) {
+  return (float)((i32data * VFSR * 1000) / FULL_SCALE);
 }
 
 float adcToVoltage(int32_t adc) {
-  // 2.048V reference, 23-bit resolution
-  return (adc * 2.048) / 8388607.0;
+  return convertToMilliV(adc) / 1000.0;
 }
 
 float adcToPPM(int32_t adc, uint8_t sensorType) {
@@ -248,26 +183,16 @@ void loop() {
     }
   }
   
+  // 온도 센서 읽기 (내장 온도 센서)
+  sensors[0].ads1220->TemperatureSensorMode_enable();
+  int32_t temp_adc = sensors[0].ads1220->Read_SingleShot_WaitForData();
+  sensors[0].ads1220->TemperatureSensorMode_disable();
+  
+  // 온도 계산 (ADS1220 데이터시트 참조)
+  float temperature = (float)temp_adc * 0.03125;  // 온도 변환 계수
+  Serial.print("\nInternal Temperature: ");
+  Serial.print(temperature, 2);
+  Serial.println(" °C");
+  
   delay(1000);
-}
-
-// 디버깅용 함수
-void readAllRegisters(uint8_t cs) {
-  Serial.println("\n--- Register Dump ---");
-  
-  digitalWrite(cs, LOW);
-  delayMicroseconds(10);
-  
-  for (int i = 0; i < 4; i++) {
-    SPI.transfer(ADS1220_CMD_RREG | i);
-    SPI.transfer(0x00);
-    uint8_t value = SPI.transfer(0x00);
-    
-    Serial.print("CONFIG");
-    Serial.print(i);
-    Serial.print(" = 0x");
-    Serial.println(value, HEX);
-  }
-  
-  digitalWrite(cs, HIGH);
 }
