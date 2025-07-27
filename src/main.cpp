@@ -114,7 +114,7 @@ void initSensor(uint8_t index) {
   ads->PGA_OFF();                          // PGA 비활성화 (2.048V 범위 사용)
   ads->set_conv_mode_single_shot();       // 단일 샷 모드
   ads->set_VREF(VREF_2048);               // 내부 2.048V 레퍼런스 사용
-  ads->set_FIR_Filter(FIR_FILTER_NONE);   // FIR 필터 비활성화
+  ads->set_FIR_Filter(FIR_OFF);   // FIR 필터 비활성화
   
   Serial.println("Done");
   delay(5);

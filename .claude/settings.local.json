@@ -4,7 +4,8 @@
       "WebFetch(domain:)",
       "WebFetch(domain:registry.platformio.org)",
       "WebFetch(domain:github.com)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(ls:*)"
     ],
     "deny": []
   }
