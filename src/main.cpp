@@ -28,15 +28,15 @@ struct Sensor {
   Protocentral_ADS1220* ads1220;  // ADS1220 인스턴스 포인터
 };
 
-// DRDY 핀 정의 (각 센서마다 다른 핀 필요)
+// DRDY 핀 사용 안함 (-1로 설정)
 #if USE_SENSOR == 0
-Sensor sensors[] = { {4,  8, "Formaldehyde", 0, 0.0, nullptr} };
+Sensor sensors[] = { {4,  -1, "Formaldehyde", 0, 0.0, nullptr} };
 #elif USE_SENSOR == 1
-Sensor sensors[] = { {17, 18, "Acetic Acid",  0, 0.0, nullptr} };
+Sensor sensors[] = { {17, -1, "Acetic Acid",  0, 0.0, nullptr} };
 #elif USE_SENSOR == 2
-Sensor sensors[] = { {16, 9, "Acetaldehyde", 0, 0.0, nullptr} };
+Sensor sensors[] = { {16, -1, "Acetaldehyde", 0, 0.0, nullptr} };
 #elif USE_SENSOR == 3
-Sensor sensors[] = { {15, 10, "Toluene",      0, 0.0, nullptr} };
+Sensor sensors[] = { {15, -1, "Toluene",      0, 0.0, nullptr} };
 #else
 #error "Invalid sensor selected. Please choose a value between 0 and 3."
 #endif
